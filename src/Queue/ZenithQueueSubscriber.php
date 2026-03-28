@@ -2,31 +2,29 @@
 
 namespace Gravito\Zenith\Laravel\Queue;
 
-use Gravito\Zenith\Laravel\Support\RedisPublisher;
+use Gravito\Zenith\Laravel\Contracts\TransportInterface;
+use Gravito\Zenith\Laravel\DataTransferObjects\LogEntry;
+use Gravito\Zenith\Laravel\Support\ChannelRegistry;
+use Gravito\Zenith\Laravel\Support\GeneratesWorkerId;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
-use Illuminate\Support\Facades\Event;
 
-/**
- * Queue event subscriber for Zenith monitoring.
- */
 class ZenithQueueSubscriber
 {
-    protected RedisPublisher $publisher;
+    use GeneratesWorkerId;
+
     protected string $workerId;
     protected array $ignoreJobs;
 
-    public function __construct()
-    {
-        $this->publisher = new RedisPublisher();
+    public function __construct(
+        protected TransportInterface $transport,
+        protected ChannelRegistry $channels,
+    ) {
         $this->workerId = $this->generateWorkerId();
         $this->ignoreJobs = config('zenith.queues.ignore_jobs', []);
     }
 
-    /**
-     * Register the listeners for the subscriber.
-     */
     public function subscribe($events): void
     {
         if (!config('zenith.queues.enabled', true)) {
@@ -38,9 +36,6 @@ class ZenithQueueSubscriber
         $events->listen(JobFailed::class, [$this, 'handleJobFailed']);
     }
 
-    /**
-     * Handle the JobProcessing event.
-     */
     public function handleJobProcessing(JobProcessing $event): void
     {
         $jobName = $this->getJobName($event->job);
@@ -52,9 +47,6 @@ class ZenithQueueSubscriber
         $this->publishLog('info', "Processing {$jobName}", $event->job->getQueue());
     }
 
-    /**
-     * Handle the JobProcessed event.
-     */
     public function handleJobProcessed(JobProcessed $event): void
     {
         $jobName = $this->getJobName($event->job);
@@ -65,14 +57,13 @@ class ZenithQueueSubscriber
 
         $this->publishLog('success', "Completed {$jobName}", $event->job->getQueue());
 
-        // Increment throughput counter
-        $minute = floor(time() / 60);
-        $this->publisher->incr("flux_console:throughput:{$minute}", 3600);
+        $minute = (int) floor(time() / 60);
+        $this->transport->increment(
+            $this->channels->throughputKey($minute),
+            $this->channels->counterTtl(),
+        );
     }
 
-    /**
-     * Handle the JobFailed event.
-     */
     public function handleJobFailed(JobFailed $event): void
     {
         $jobName = $this->getJobName($event->job);
@@ -84,45 +75,42 @@ class ZenithQueueSubscriber
         $errorMessage = $event->exception->getMessage();
         $this->publishLog('error', "Failed {$jobName}: {$errorMessage}", $event->job->getQueue());
 
-        // Also increment throughput for failed jobs
-        $minute = floor(time() / 60);
-        $this->publisher->incr("flux_console:throughput:{$minute}", 3600);
+        $minute = (int) floor(time() / 60);
+        $this->transport->increment(
+            $this->channels->throughputKey($minute),
+            $this->channels->counterTtl(),
+        );
     }
 
-    /**
-     * Publish a log message to Zenith.
-     */
     protected function publishLog(string $level, string $message, ?string $queue = null): void
     {
-        $payload = [
-            'level' => $level,
-            'message' => $message,
-            'workerId' => $this->workerId,
-            'timestamp' => now()->toIso8601String(),
-        ];
+        $entry = new LogEntry(
+            level: $level,
+            message: $message,
+            workerId: $this->workerId,
+            timestamp: now()->toIso8601String(),
+            context: $queue ? ['queue' => $queue] : [],
+        );
 
-        if ($queue) {
-            $payload['queue'] = $queue;
-        }
-
-        $this->publisher->publish('flux_console:logs', $payload);
+        $this->transport->publish($this->channels->logs(), $entry->toArray());
     }
 
-    /**
-     * Get the job name from the job instance.
-     */
     protected function getJobName($job): string
     {
-        $payload = $job->payload();
-        $displayName = $payload['displayName'] ?? 'Unknown Job';
-        
-        // Simplify class name (remove namespace)
-        return class_basename($displayName);
+        try {
+            $payload = $job->payload();
+            $displayName = $payload['displayName'] ?? null;
+
+            if (!is_string($displayName) || $displayName === '') {
+                return 'Unknown Job';
+            }
+
+            return class_basename($displayName);
+        } catch (\Throwable $e) {
+            return 'Unknown Job';
+        }
     }
 
-    /**
-     * Check if a job should be ignored.
-     */
     protected function shouldIgnore(string $jobName): bool
     {
         if (!config('zenith.queues.monitor_all', true)) {
@@ -136,13 +124,5 @@ class ZenithQueueSubscriber
         }
 
         return false;
-    }
-
-    /**
-     * Generate a unique worker ID.
-     */
-    protected function generateWorkerId(): string
-    {
-        return gethostname() . '-' . getmypid();
     }
 }
