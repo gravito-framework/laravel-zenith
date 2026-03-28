@@ -26,6 +26,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Channel & Key Names
+    |--------------------------------------------------------------------------
+    |
+    | Customize the Redis channel and key names used by Zenith. Each channel
+    | can be independently configured to avoid collisions with other apps.
+    |
+    */
+    'channels' => [
+        'logs'        => env('ZENITH_CHANNEL_LOGS', 'zenith:logs'),
+        'worker'      => env('ZENITH_CHANNEL_WORKER', 'zenith:worker:'),
+        'throughput'  => env('ZENITH_CHANNEL_THROUGHPUT', 'zenith:throughput:'),
+        'http'        => env('ZENITH_CHANNEL_HTTP', 'zenith:metrics:http:'),
+        'counter_ttl' => 3600,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging Configuration
     |--------------------------------------------------------------------------
     |
