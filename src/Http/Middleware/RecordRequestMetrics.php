@@ -3,36 +3,31 @@
 namespace Gravito\Zenith\Laravel\Http\Middleware;
 
 use Closure;
-use Gravito\Zenith\Laravel\Support\RedisPublisher;
+use Gravito\Zenith\Laravel\Contracts\TransportInterface;
+use Gravito\Zenith\Laravel\DataTransferObjects\LogEntry;
+use Gravito\Zenith\Laravel\Support\ChannelRegistry;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Middleware to record HTTP request metrics.
- */
 class RecordRequestMetrics
 {
-    protected RedisPublisher $publisher;
     protected array $ignorePaths;
     protected int $slowThreshold;
 
-    public function __construct()
-    {
-        $this->publisher = new RedisPublisher();
+    public function __construct(
+        protected TransportInterface $transport,
+        protected ChannelRegistry $channels,
+    ) {
         $this->ignorePaths = config('zenith.http.ignore_paths', []);
         $this->slowThreshold = config('zenith.http.slow_threshold', 1000);
     }
 
-    /**
-     * Handle an incoming request.
-     */
     public function handle(Request $request, Closure $next): Response
     {
         if (!config('zenith.enabled', true) || !config('zenith.http.enabled', true)) {
             return $next($request);
         }
 
-        // Check if path should be ignored
         if ($this->shouldIgnorePath($request->path())) {
             return $next($request);
         }
@@ -41,53 +36,49 @@ class RecordRequestMetrics
 
         $response = $next($request);
 
-        $duration = (microtime(true) - $startTime) * 1000; // Convert to milliseconds
+        $duration = (microtime(true) - $startTime) * 1000;
 
         $this->recordMetrics($request, $response, $duration);
 
         return $response;
     }
 
-    /**
-     * Record request metrics to Zenith.
-     */
     protected function recordMetrics(Request $request, Response $response, float $duration): void
     {
         $statusCode = $response->getStatusCode();
         $route = $request->route();
-        $routeName = $route ? ($route->getName() ?? $route->getActionName()) : 'Unknown';
+        $routeName = 'Unknown';
+        if ($route instanceof \Illuminate\Routing\Route) {
+            $routeName = $route->getName() ?? $route->getActionName();
+        }
 
-        // Determine log level based on status code and duration
         $level = $this->determineLevel($statusCode, $duration);
 
-        // Only log if it's noteworthy (errors or slow requests)
         if ($level === 'info' && $duration < $this->slowThreshold) {
-            return; // Skip normal fast requests to reduce noise
+            return;
         }
 
         $message = $this->formatMessage($request, $statusCode, $duration, $routeName);
 
-        $this->publisher->publish('flux_console:logs', [
-            'level' => $level,
-            'message' => $message,
-            'workerId' => gethostname() . '-http',
-            'timestamp' => now()->toIso8601String(),
-            'context' => [
+        $entry = new LogEntry(
+            level: $level,
+            message: $message,
+            workerId: gethostname() . '-http',
+            timestamp: now()->toIso8601String(),
+            context: [
                 'method' => $request->method(),
                 'path' => $request->path(),
                 'status' => $statusCode,
                 'duration' => round($duration, 2),
                 'route' => $routeName,
             ],
-        ]);
+        );
 
-        // Increment metrics counters
+        $this->transport->publish($this->channels->logs(), $entry->toArray());
+
         $this->incrementMetrics($statusCode, $duration);
     }
 
-    /**
-     * Determine log level based on status code and duration.
-     */
     protected function determineLevel(int $statusCode, float $duration): string
     {
         if ($statusCode >= 500) {
@@ -105,18 +96,11 @@ class RecordRequestMetrics
         return 'info';
     }
 
-    /**
-     * Format the log message.
-     */
     protected function formatMessage(Request $request, int $statusCode, float $duration, string $routeName): string
     {
         $method = $request->method();
         $path = $request->path();
         $durationFormatted = round($duration, 2) . 'ms';
-
-        if ($statusCode >= 500) {
-            return "HTTP {$statusCode} {$method} /{$path} ({$durationFormatted})";
-        }
 
         if ($statusCode >= 400) {
             return "HTTP {$statusCode} {$method} /{$path} ({$durationFormatted})";
@@ -129,42 +113,36 @@ class RecordRequestMetrics
         return "HTTP {$statusCode} {$method} /{$path} ({$durationFormatted})";
     }
 
-    /**
-     * Increment metrics counters.
-     */
     protected function incrementMetrics(int $statusCode, float $duration): void
     {
-        $minute = floor(time() / 60);
+        $minute = (int) floor(time() / 60);
+        $ttl = $this->channels->counterTtl();
 
-        // Increment status code counter
         $statusCategory = $this->getStatusCategory($statusCode);
-        $this->publisher->incr("flux_console:metrics:http:{$statusCategory}:{$minute}", 3600);
+        $this->transport->increment(
+            $this->channels->httpMetricKey($statusCategory, $minute),
+            $ttl,
+        );
 
-        // Increment slow request counter if applicable
         if ($duration >= $this->slowThreshold) {
-            $this->publisher->incr("flux_console:metrics:http:slow:{$minute}", 3600);
+            $this->transport->increment(
+                $this->channels->httpMetricKey('slow', $minute),
+                $ttl,
+            );
         }
     }
 
-    /**
-     * Get status code category (2xx, 4xx, 5xx).
-     */
     protected function getStatusCategory(int $statusCode): string
     {
         return substr((string) $statusCode, 0, 1) . 'xx';
     }
 
-    /**
-     * Check if the request path should be ignored.
-     */
     protected function shouldIgnorePath(string $path): bool
     {
-        foreach ($this->ignorePaths as $pattern) {
-            // Convert wildcard pattern to regex
-            $regex = str_replace('*', '.*', $pattern);
-            $regex = '#^' . $regex . '$#';
+        $path = '/' . ltrim($path, '/');
 
-            if (preg_match($regex, $path)) {
+        foreach ($this->ignorePaths as $pattern) {
+            if (fnmatch($pattern, $path)) {
                 return true;
             }
         }
