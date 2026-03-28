@@ -2,35 +2,24 @@
 
 namespace Gravito\Zenith\Laravel\Console;
 
-use Gravito\Zenith\Laravel\Support\RedisPublisher;
+use Gravito\Zenith\Laravel\Contracts\TransportInterface;
+use Gravito\Zenith\Laravel\DataTransferObjects\HeartbeatEntry;
+use Gravito\Zenith\Laravel\Support\ChannelRegistry;
+use Gravito\Zenith\Laravel\Support\GeneratesWorkerId;
 use Illuminate\Console\Command;
 
 class ZenithHeartbeatCommand extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
+    use GeneratesWorkerId;
+
     protected $signature = 'zenith:heartbeat';
+    protected $description = 'Send periodic heartbeat to Zenith (run as daemon)';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Send periodic heartbeat to Gravito Zenith (run as daemon)';
-
-    protected RedisPublisher $publisher;
     protected string $workerId;
     protected int $startTime;
 
-    /**
-     * Execute the console command.
-     */
-    public function handle(): int
+    public function handle(TransportInterface $transport, ChannelRegistry $channels): int
     {
-        $this->publisher = new RedisPublisher();
         $this->workerId = $this->generateWorkerId();
         $this->startTime = time();
 
@@ -41,44 +30,36 @@ class ZenithHeartbeatCommand extends Command
         $this->info("Interval: {$interval}s, TTL: {$ttl}s");
         $this->newLine();
 
-        while (true) {
-            $this->sendHeartbeat($ttl);
+        while (true) { // @phpstan-ignore while.alwaysTrue
+            $this->sendHeartbeat($transport, $channels, $ttl);
             sleep($interval);
         }
-
-        return self::SUCCESS;
     }
 
-    /**
-     * Send a heartbeat to Redis.
-     */
-    protected function sendHeartbeat(int $ttl): void
+    protected function sendHeartbeat(TransportInterface $transport, ChannelRegistry $channels, int $ttl): void
     {
-        $payload = [
-            'id' => $this->workerId,
-            'hostname' => gethostname(),
-            'pid' => getmypid(),
-            'uptime' => time() - $this->startTime,
-            'queues' => $this->getMonitoredQueues(),
-            'concurrency' => $this->getConcurrency(),
-            'memory' => [
-                'rss' => $this->formatMemory(memory_get_usage(true)),
-                'heapUsed' => $this->formatMemory(memory_get_usage()),
-                'heapTotal' => 'N/A',
-            ],
-            'timestamp' => now()->toIso8601String(),
-            'loadAvg' => $this->getLoadAverage(),
-        ];
+        $entry = new HeartbeatEntry(
+            id: $this->workerId,
+            hostname: gethostname(),
+            pid: getmypid(),
+            uptime: time() - $this->startTime,
+            queues: $this->getMonitoredQueues(),
+            concurrency: $this->getConcurrency(),
+            memoryUsedMb: round(memory_get_usage() / 1024 / 1024, 2),
+            memoryPeakMb: round(memory_get_peak_usage(true) / 1024 / 1024, 2),
+            timestamp: now()->toIso8601String(),
+            loadAvg: $this->getLoadAverage(),
+        );
 
-        $key = "flux_console:worker:{$this->workerId}";
-        $this->publisher->setex($key, $payload, $ttl);
+        $transport->store(
+            $channels->workerKey($this->workerId),
+            $entry->toArray(),
+            $ttl,
+        );
 
-        $this->line("❤️  Heartbeat sent at " . now()->format('H:i:s'));
+        $this->line("heartbeat sent at " . now()->format('H:i:s'));
     }
 
-    /**
-     * Get the list of monitored queues.
-     */
     protected function getMonitoredQueues(): array
     {
         $queueConnection = config('queue.default');
@@ -95,33 +76,26 @@ class ZenithHeartbeatCommand extends Command
         return ['default'];
     }
 
-    /**
-     * Get worker concurrency (from Horizon config if available).
-     */
     protected function getConcurrency(): int
     {
-        // Try to get from Horizon config
         if (config('horizon')) {
             $environments = config('horizon.environments', []);
             $environment = config('app.env', 'production');
-            
-            if (isset($environments[$environment])) {
+
+            if (isset($environments[$environment]) && is_array($environments[$environment])) {
                 $supervisors = $environments[$environment];
                 $supervisor = reset($supervisors);
-                
-                if (isset($supervisor['processes'])) {
-                    return (int) $supervisor['processes'];
+
+                if (is_array($supervisor) && isset($supervisor['processes'])) {
+                    $value = (int) $supervisor['processes'];
+                    return $value > 0 ? $value : 1;
                 }
             }
         }
 
-        // Fallback to queue worker config
         return 1;
     }
 
-    /**
-     * Get system load average.
-     */
     protected function getLoadAverage(): array
     {
         if (function_exists('sys_getloadavg')) {
@@ -129,22 +103,5 @@ class ZenithHeartbeatCommand extends Command
         }
 
         return [0, 0, 0];
-    }
-
-    /**
-     * Format memory in human-readable format.
-     */
-    protected function formatMemory(int $bytes): string
-    {
-        $mb = round($bytes / 1024 / 1024, 2);
-        return "{$mb} MB";
-    }
-
-    /**
-     * Generate a unique worker ID.
-     */
-    protected function generateWorkerId(): string
-    {
-        return gethostname() . '-' . getmypid();
     }
 }

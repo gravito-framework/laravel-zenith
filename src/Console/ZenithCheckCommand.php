@@ -2,34 +2,21 @@
 
 namespace Gravito\Zenith\Laravel\Console;
 
-use Gravito\Zenith\Laravel\Support\RedisPublisher;
+use Gravito\Zenith\Laravel\Contracts\TransportInterface;
+use Gravito\Zenith\Laravel\DataTransferObjects\LogEntry;
+use Gravito\Zenith\Laravel\Support\ChannelRegistry;
 use Illuminate\Console\Command;
 
 class ZenithCheckCommand extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'zenith:check';
+    protected $description = 'Verify Zenith configuration and transport connection';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Verify Zenith configuration and Redis connection';
-
-    /**
-     * Execute the console command.
-     */
-    public function handle(): int
+    public function handle(TransportInterface $transport, ChannelRegistry $channels): int
     {
-        $this->info('🔍 Zenith Configuration Check');
+        $this->info('Zenith Configuration Check');
         $this->newLine();
 
-        // Check if Zenith is enabled
         $enabled = config('zenith.enabled', false);
         $this->checkItem('Zenith Enabled', $enabled);
 
@@ -38,28 +25,26 @@ class ZenithCheckCommand extends Command
             return self::FAILURE;
         }
 
-        // Check Redis connection
         $connection = config('zenith.connection', 'default');
         $this->info("Redis Connection: <comment>{$connection}</comment>");
 
-        $publisher = new RedisPublisher($connection);
-        $pingSuccess = $publisher->ping();
-        $this->checkItem('Redis Connection', $pingSuccess);
+        $pingSuccess = $transport->ping();
+        $this->checkItem('Transport Connection', $pingSuccess);
 
         if (!$pingSuccess) {
-            $this->error('Failed to connect to Redis. Check your configuration.');
+            $this->error('Failed to connect to transport. Check your configuration.');
             return self::FAILURE;
         }
 
-        // Test publishing
         $this->info('Testing publish capability...');
         try {
-            $publisher->publish('flux_console:logs', [
-                'level' => 'info',
-                'message' => 'Zenith health check',
-                'workerId' => gethostname() . '-check',
-                'timestamp' => now()->toIso8601String(),
-            ]);
+            $entry = new LogEntry(
+                level: 'info',
+                message: 'Zenith health check',
+                workerId: gethostname() . '-check',
+                timestamp: now()->toIso8601String(),
+            );
+            $transport->publish($channels->logs(), $entry->toArray());
             $this->checkItem('Publish Test', true);
         } catch (\Throwable $e) {
             $this->checkItem('Publish Test', false);
@@ -67,31 +52,27 @@ class ZenithCheckCommand extends Command
             return self::FAILURE;
         }
 
-        // Display configuration
         $this->newLine();
-        $this->info('📋 Configuration:');
+        $this->info('Configuration:');
         $this->table(
             ['Feature', 'Status'],
             [
-                ['Logging', config('zenith.logging.enabled') ? '✓ Enabled' : '✗ Disabled'],
-                ['Queue Monitoring', config('zenith.queues.enabled') ? '✓ Enabled' : '✗ Disabled'],
-                ['HTTP Monitoring', config('zenith.http.enabled') ? '✓ Enabled' : '✗ Disabled'],
+                ['Logging', config('zenith.logging.enabled') ? 'Enabled' : 'Disabled'],
+                ['Queue Monitoring', config('zenith.queues.enabled') ? 'Enabled' : 'Disabled'],
+                ['HTTP Monitoring', config('zenith.http.enabled') ? 'Enabled' : 'Disabled'],
             ]
         );
 
         $this->newLine();
-        $this->info('✅ All checks passed! Zenith is ready.');
-        
+        $this->info('All checks passed! Zenith is ready.');
+
         return self::SUCCESS;
     }
 
-    /**
-     * Display a check item result.
-     */
     protected function checkItem(string $label, bool $success): void
     {
-        $icon = $success ? '✓' : '✗';
+        $icon = $success ? 'OK' : 'FAIL';
         $color = $success ? 'info' : 'error';
-        $this->line("  {$icon} {$label}", $color);
+        $this->line("  [{$icon}] {$label}", $color);
     }
 }
