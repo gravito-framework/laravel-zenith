@@ -24,7 +24,10 @@ abstract class TestCase extends BaseTestCase
     {
         // Setup default configuration
         $app['config']->set('zenith.enabled', true);
-        $app['config']->set('zenith.connection', 'default');
+        $app['config']->set('zenith.transport', [
+            'driver' => 'redis',
+            'connection' => 'default',
+        ]);
         $app['config']->set('zenith.logging.enabled', true);
         $app['config']->set('zenith.queues.enabled', true);
         $app['config']->set('zenith.http.enabled', true);

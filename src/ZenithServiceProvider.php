@@ -9,7 +9,7 @@ use Gravito\Zenith\Laravel\Logging\ZenithLogger;
 use Gravito\Zenith\Laravel\Queue\ZenithQueueSubscriber;
 use Gravito\Zenith\Laravel\Support\ChannelRegistry;
 use Gravito\Zenith\Laravel\Support\ConfigValidator;
-use Gravito\Zenith\Laravel\Transport\RedisTransport;
+use Gravito\Zenith\Laravel\Transport\TransportManager;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 
@@ -25,8 +25,10 @@ class ZenithServiceProvider extends ServiceProvider
             'zenith'
         );
 
+        $this->app->singleton(TransportManager::class);
+
         $this->app->singleton(TransportInterface::class, function ($app) {
-            return new RedisTransport(config('zenith.connection', 'default'));
+            return $app->make(TransportManager::class)->driver();
         });
 
         $this->app->singleton(ChannelRegistry::class, function ($app) {
