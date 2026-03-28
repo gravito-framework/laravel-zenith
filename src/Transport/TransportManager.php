@@ -13,7 +13,13 @@ class TransportManager extends Manager
             return 'null';
         }
 
-        return config('zenith.transport.driver', 'redis');
+        $transport = config('zenith.transport');
+
+        if (! is_array($transport)) {
+            return 'redis';
+        }
+
+        return $transport['driver'] ?? 'redis';
     }
 
     protected function createRedisDriver(): TransportInterface

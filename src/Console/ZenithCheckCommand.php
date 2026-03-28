@@ -25,8 +25,9 @@ class ZenithCheckCommand extends Command
             return self::FAILURE;
         }
 
-        $connection = config('zenith.connection', 'default');
-        $this->info("Redis Connection: <comment>{$connection}</comment>");
+        $driver = config('zenith.transport.driver', 'redis');
+        $connection = config('zenith.transport.connection', 'default');
+        $this->info("Transport: <comment>{$driver}</comment> (connection: {$connection})");
 
         $pingSuccess = $transport->ping();
         $this->checkItem('Transport Connection', $pingSuccess);
