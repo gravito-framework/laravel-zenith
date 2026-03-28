@@ -38,11 +38,15 @@ composer install
 - Source: `Gravito\Zenith\Laravel\` → `src/`
 - Tests: `Gravito\Zenith\Laravel\Tests\` → `tests/`
 
-### Transport Layer
+### Transport Layer (Pluggable)
 
-**TransportInterface** (`src/Contracts/TransportInterface.php`) — Contract defining `publish()`, `store()`, `increment()`, and `ping()`. All components depend on this interface, not a concrete implementation.
+**TransportInterface** (`src/Contracts/TransportInterface.php`) — Contract defining `publish(string $topic, array $payload)`, `store(string $key, array $data, int $ttl)`, `increment(string $key, ?int $ttl)`, and `ping(): bool`. Parameters use transport-agnostic naming (e.g. `$topic` not `$channel`). All components depend on this interface, not a concrete implementation.
 
-**RedisTransport** (`src/Transport/RedisTransport.php`) — Redis implementation of `TransportInterface`. Uses `Connection::command()` for all operations. Every operation is wrapped in try/catch to silently fail (zero-blocking philosophy).
+**TransportManager** (`src/Transport/TransportManager.php`) — Extends `Illuminate\Support\Manager` (Laravel Manager Pattern). Resolves the active transport driver from `config('zenith.transport.driver')`. Built-in drivers: `redis`, `null`. When `zenith.enabled = false`, auto-downgrades to `NullTransport`. Community packages register custom drivers via `TransportManager::extend('name', fn () => new CustomTransport(...))`.
+
+**RedisTransport** (`src/Transport/RedisTransport.php`) — Redis implementation of `TransportInterface`. Constructor requires `string $connection`. Uses `Connection::command()` for all operations. Every operation is wrapped in try/catch to silently fail (zero-blocking philosophy). Does NOT check `zenith.enabled` — that's handled by `TransportManager`.
+
+**NullTransport** (`src/Transport/NullTransport.php`) — No-op implementation. All methods do nothing, `ping()` returns `true`. Used when Zenith is disabled or in testing environments.
 
 ### Data Transfer Objects
 
@@ -54,7 +58,7 @@ composer install
 
 ### Core Components
 
-**ZenithServiceProvider** (`src/ZenithServiceProvider.php`) — Auto-discovered via `composer.json` extra.laravel.providers. Registers `TransportInterface` and `ChannelRegistry` as singletons, config, commands, the custom `zenith` log driver, and the queue event subscriber. Runs `ConfigValidator::validate()` at boot when enabled. All features gate on `config('zenith.enabled')`.
+**ZenithServiceProvider** (`src/ZenithServiceProvider.php`) — Auto-discovered via `composer.json` extra.laravel.providers. Registers `TransportManager` and `ChannelRegistry` as singletons. `TransportInterface` is bound as a singleton that resolves from `TransportManager::driver()`. Also registers config, commands, the custom `zenith` log driver, and the queue event subscriber. Runs `ConfigValidator::validate()` at boot when enabled.
 
 **ZenithQueueSubscriber** (`src/Queue/ZenithQueueSubscriber.php`) — Event subscriber listening to `JobProcessing`, `JobProcessed`, `JobFailed`. Receives `TransportInterface` + `ChannelRegistry` via constructor injection. Uses `LogEntry` DTO for payloads.
 
@@ -72,7 +76,7 @@ composer install
 
 **GeneratesWorkerId** (`src/Support/GeneratesWorkerId.php`) — Trait providing `generateWorkerId()` (`hostname-pid`). Used by QueueSubscriber, LogHandler, and HeartbeatCommand.
 
-**ConfigValidator** (`src/Support/ConfigValidator.php`) — Validates Zenith config at boot: numeric ranges for `slow_threshold`/`interval`/`ttl`, TTL >= interval constraint, string array validation for `ignore_jobs`/`ignore_paths`.
+**ConfigValidator** (`src/Support/ConfigValidator.php`) — Validates Zenith config at boot: `transport.driver` must be a non-empty string, numeric ranges for `slow_threshold`/`interval`/`ttl`, TTL >= interval constraint, string array validation for `ignore_jobs`/`ignore_paths`.
 
 ### Channel/Key Convention
 
@@ -96,4 +100,24 @@ GitHub Actions (`.github/workflows/tests.yml`) runs on push/PR to main:
 
 ### Configuration
 
-Published via `vendor:publish --tag=zenith-config` to `config/zenith.php`. All features can be independently enabled/disabled. Config is validated at boot by `ConfigValidator`. The package uses a dedicated Redis connection (`ZENITH_REDIS_CONNECTION` env var).
+Published via `vendor:publish --tag=zenith-config` to `config/zenith.php`. All features can be independently enabled/disabled. Config is validated at boot by `ConfigValidator`.
+
+Transport config lives under `zenith.transport`:
+- `driver` (default: `'redis'`, env: `ZENITH_TRANSPORT`) — transport driver name
+- `connection` (default: `'default'`, env: `ZENITH_REDIS_CONNECTION`) — Redis connection name (only used by Redis driver)
+
+Community drivers are registered via `TransportManager::extend()` in a ServiceProvider and activated by setting `transport.driver` in config.
+
+### Adding a Custom Transport Driver
+
+```php
+// 1. Implement TransportInterface
+class DatadogTransport implements TransportInterface { ... }
+
+// 2. Register in your ServiceProvider
+$this->app->resolving(TransportManager::class, function ($manager) {
+    $manager->extend('datadog', fn () => new DatadogTransport(...));
+});
+
+// 3. User sets config: 'transport.driver' => 'datadog'
+```
