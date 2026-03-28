@@ -202,9 +202,19 @@ composer install
 # Run tests
 ./vendor/bin/phpunit
 
-# Run static analysis
+# Run a single test
+./vendor/bin/phpunit --filter=test_method_name
+
+# Static analysis (PHPStan level 5)
 ./vendor/bin/phpstan analyse
 ```
+
+### CI
+
+GitHub Actions runs on every push/PR to `main`:
+- **Test matrix**: PHP 8.1, 8.2, 8.3 × Laravel 10, 11
+- **Static analysis**: PHPStan level 5
+- **Redis**: Service container for integration tests
 
 ## License
 

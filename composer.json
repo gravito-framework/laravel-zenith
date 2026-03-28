@@ -27,7 +27,8 @@
     "require-dev": {
         "orchestra/testbench": "^8.0|^9.0",
         "phpunit/phpunit": "^10.0",
-        "mockery/mockery": "^1.6"
+        "mockery/mockery": "^1.6",
+        "phpstan/phpstan": "^1.10"
     },
     "autoload": {
         "psr-4": {
@@ -46,6 +47,5 @@
             ]
         }
     },
-    "minimum-stability": "dev",
     "prefer-stable": true
 }

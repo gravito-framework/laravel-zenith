@@ -11,3 +11,4 @@ composer.lock
 phpunit.xml.cache
 
 .phpunit.result.cache
+.phpstan.cache/
