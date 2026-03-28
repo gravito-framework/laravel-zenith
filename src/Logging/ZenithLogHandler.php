@@ -2,58 +2,52 @@
 
 namespace Gravito\Zenith\Laravel\Logging;
 
-use Gravito\Zenith\Laravel\Support\RedisPublisher;
+use Gravito\Zenith\Laravel\Contracts\TransportInterface;
+use Gravito\Zenith\Laravel\DataTransferObjects\LogEntry;
+use Gravito\Zenith\Laravel\Support\ChannelRegistry;
+use Gravito\Zenith\Laravel\Support\GeneratesWorkerId;
 use Monolog\Handler\AbstractProcessingHandler;
 use Monolog\LogRecord;
 use Monolog\Level;
+use Throwable;
 
-/**
- * Monolog handler that publishes logs to Zenith via Redis.
- */
 class ZenithLogHandler extends AbstractProcessingHandler
 {
-    protected RedisPublisher $publisher;
+    use GeneratesWorkerId;
+
     protected string $workerId;
 
-    public function __construct($level = Level::Debug, bool $bubble = true)
-    {
+    public function __construct(
+        protected TransportInterface $transport,
+        protected ChannelRegistry $channels,
+        $level = Level::Debug,
+        bool $bubble = true,
+    ) {
         parent::__construct($level, $bubble);
-        
-        $this->publisher = new RedisPublisher();
         $this->workerId = $this->generateWorkerId();
     }
 
-    /**
-     * Write the log record to Redis.
-     */
     protected function write(LogRecord $record): void
     {
-        if (!config('zenith.logging.enabled', true)) {
-            return;
+        try {
+            if (!config('zenith.logging.enabled', true)) {
+                return;
+            }
+
+            $entry = new LogEntry(
+                level: $this->mapLevel($record->level),
+                message: $record->message,
+                workerId: $this->workerId,
+                timestamp: $record->datetime->format('c'),
+                context: $record->context,
+            );
+
+            $this->transport->publish($this->channels->logs(), $entry->toArray());
+        } catch (Throwable $e) {
+            // Silently fail to avoid breaking the logging pipeline
         }
-
-        // Map Monolog level to Zenith level
-        $level = $this->mapLevel($record->level);
-
-        $payload = [
-            'level' => $level,
-            'message' => $record->message,
-            'workerId' => $this->workerId,
-            'timestamp' => $record->datetime->format('c'), // ISO 8601
-            'context' => $record->context,
-        ];
-
-        // Add queue info if present in context
-        if (isset($record->context['queue'])) {
-            $payload['queue'] = $record->context['queue'];
-        }
-
-        $this->publisher->publish('flux_console:logs', $payload);
     }
 
-    /**
-     * Map Monolog level to Zenith level.
-     */
     protected function mapLevel(Level $level): string
     {
         return match ($level->value) {
@@ -61,13 +55,5 @@ class ZenithLogHandler extends AbstractProcessingHandler
             Level::Warning->value => 'warn',
             default => 'info',
         };
-    }
-
-    /**
-     * Generate a unique worker ID.
-     */
-    protected function generateWorkerId(): string
-    {
-        return gethostname() . '-' . getmypid();
     }
 }
