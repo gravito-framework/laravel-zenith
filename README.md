@@ -34,7 +34,7 @@ Laravel Zenith is part of the **Gravito Zenith** monitoring ecosystem. It works 
 
 - PHP 8.1+
 - Laravel 10.x or 11.x
-- Redis (for transport)
+- Redis (default transport, or any custom transport driver)
 
 ## Installation
 
@@ -52,7 +52,20 @@ This creates `config/zenith.php` where you can customize behavior.
 
 ## Configuration
 
-### 1. Redis Connection
+### 1. Transport Driver
+
+Zenith uses a pluggable transport layer. The default driver is `redis`. Configure in `config/zenith.php`:
+
+```php
+'transport' => [
+    'driver' => env('ZENITH_TRANSPORT', 'redis'),
+    'connection' => env('ZENITH_REDIS_CONNECTION', 'default'),
+],
+```
+
+Built-in drivers: `redis`, `null` (no-op, for testing).
+
+### 2. Redis Connection (for Redis driver)
 
 Add a dedicated Redis connection in `config/database.php`:
 
@@ -68,16 +81,17 @@ Add a dedicated Redis connection in `config/database.php`:
 ],
 ```
 
-### 2. Environment Variables
+### 3. Environment Variables
 
 Add to your `.env`:
 
 ```env
 ZENITH_ENABLED=true
+ZENITH_TRANSPORT=redis
 ZENITH_REDIS_CONNECTION=zenith
 ```
 
-### 3. Log Channel (Optional)
+### 4. Log Channel (Optional)
 
 To stream Laravel logs to Zenith, add a channel in `config/logging.php`:
 
@@ -156,20 +170,23 @@ See `config/zenith.php` for all available options:
 ```php
 return [
     'enabled' => env('ZENITH_ENABLED', true),
-    
-    'connection' => env('ZENITH_REDIS_CONNECTION', 'default'),
-    
+
+    'transport' => [
+        'driver' => env('ZENITH_TRANSPORT', 'redis'),
+        'connection' => env('ZENITH_REDIS_CONNECTION', 'default'),
+    ],
+
     'logging' => [
         'enabled' => true,
         'level' => 'debug', // Minimum level to send
     ],
-    
+
     'queues' => [
         'enabled' => true,
         'monitor_all' => true,
         'ignore_jobs' => [],
     ],
-    
+
     'http' => [
         'enabled' => true,
         'ignore_paths' => ['/nova*', '/telescope*', '/horizon*'],
@@ -189,9 +206,73 @@ Laravel Zenith acts as "The Reporter" - it lives inside your application and rep
 └─────────────────┘       └──────────────┘       └────────────────┘
 ```
 
-**Transport**: Direct Redis pub/sub using the Gravito Pulse Protocol (GPP)
+**Transport**: Pluggable driver system (default: Redis pub/sub). Community packages can provide custom drivers for Prometheus, Datadog, InfluxDB, etc.
 
 **Philosophy**: Zero-blocking. All reporting is "fire-and-forget" to avoid impacting your application's performance.
+
+## Custom Transport Drivers
+
+Zenith's transport layer is pluggable via the Laravel Manager Pattern. To create a custom driver:
+
+### 1. Implement `TransportInterface`
+
+```php
+use Gravito\Zenith\Laravel\Contracts\TransportInterface;
+
+class DatadogTransport implements TransportInterface
+{
+    public function publish(string $topic, array $payload): void
+    {
+        // Send event to Datadog
+    }
+
+    public function store(string $key, array $data, int $ttl): void
+    {
+        // Store data with expiration
+    }
+
+    public function increment(string $key, ?int $ttl = null): void
+    {
+        // Increment a counter
+    }
+
+    public function ping(): bool
+    {
+        // Health check
+        return true;
+    }
+}
+```
+
+### 2. Register the Driver
+
+In your package's `ServiceProvider`:
+
+```php
+use Gravito\Zenith\Laravel\Transport\TransportManager;
+
+public function register(): void
+{
+    $this->app->resolving(TransportManager::class, function ($manager) {
+        $manager->extend('datadog', function () {
+            return new DatadogTransport(
+                config('zenith.transport.api_key')
+            );
+        });
+    });
+}
+```
+
+### 3. Activate
+
+Users set the driver in `config/zenith.php`:
+
+```php
+'transport' => [
+    'driver' => 'datadog',
+    'api_key' => env('DATADOG_API_KEY'),
+],
+```
 
 ## Development
 
@@ -202,9 +283,19 @@ composer install
 # Run tests
 ./vendor/bin/phpunit
 
-# Run static analysis
+# Run a single test
+./vendor/bin/phpunit --filter=test_method_name
+
+# Static analysis (PHPStan level 5)
 ./vendor/bin/phpstan analyse
 ```
+
+### CI
+
+GitHub Actions runs on every push/PR to `main`:
+- **Test matrix**: PHP 8.1, 8.2, 8.3 × Laravel 10, 11
+- **Static analysis**: PHPStan level 5
+- **Redis**: Service container for integration tests
 
 ## License
 

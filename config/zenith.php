@@ -6,30 +6,35 @@ return [
     | Zenith Enabled
     |--------------------------------------------------------------------------
     |
-    | Enable or disable Zenith monitoring globally. When disabled, no events
-    | will be sent to Redis and all monitoring features are inactive.
+    | Enable or disable Zenith monitoring globally. When disabled, the
+    | NullTransport is used and all monitoring features are inactive.
     |
     */
     'enabled' => env('ZENITH_ENABLED', true),
 
     /*
     |--------------------------------------------------------------------------
-    | Redis Connection
+    | Transport Configuration
     |--------------------------------------------------------------------------
     |
-    | The Redis connection to use for Zenith transport. This should reference
-    | a connection defined in config/database.php. It's recommended to use a
-    | dedicated connection without a prefix.
+    | Configure the transport driver used by Zenith. The default driver is
+    | "redis". Community packages can register custom drivers via
+    | TransportManager::extend(). Set to "null" for testing.
+    |
+    | Supported: "redis", "null", or any custom driver registered via extend()
     |
     */
-    'connection' => env('ZENITH_REDIS_CONNECTION', 'default'),
+    'transport' => [
+        'driver' => env('ZENITH_TRANSPORT', 'redis'),
+        'connection' => env('ZENITH_REDIS_CONNECTION', 'default'),
+    ],
 
     /*
     |--------------------------------------------------------------------------
     | Channel & Key Names
     |--------------------------------------------------------------------------
     |
-    | Customize the Redis channel and key names used by Zenith. Each channel
+    | Customize the channel and key names used by Zenith. Each channel
     | can be independently configured to avoid collisions with other apps.
     |
     */
@@ -52,7 +57,7 @@ return [
     */
     'logging' => [
         'enabled' => true,
-        
+
         // Minimum log level to send (debug, info, notice, warning, error, critical, alert, emergency)
         'level' => env('ZENITH_LOG_LEVEL', 'debug'),
     ],
@@ -68,10 +73,10 @@ return [
     */
     'queues' => [
         'enabled' => true,
-        
+
         // Monitor all jobs by default
         'monitor_all' => true,
-        
+
         // Job classes to ignore (useful for noisy internal jobs)
         'ignore_jobs' => [
             // 'App\Jobs\InternalHealthCheck',
@@ -89,7 +94,7 @@ return [
     */
     'http' => [
         'enabled' => true,
-        
+
         // Paths to ignore (supports wildcards)
         'ignore_paths' => [
             '/nova*',
@@ -98,7 +103,7 @@ return [
             '/_debugbar*',
             '/health',
         ],
-        
+
         // Threshold in milliseconds to consider a request "slow"
         'slow_threshold' => env('ZENITH_SLOW_THRESHOLD', 1000),
     ],
@@ -115,8 +120,8 @@ return [
     'heartbeat' => [
         // How often to send heartbeat (seconds)
         'interval' => 5,
-        
-        // TTL for worker keys in Redis (seconds)
+
+        // TTL for worker keys (seconds)
         'ttl' => 30,
     ],
 ];

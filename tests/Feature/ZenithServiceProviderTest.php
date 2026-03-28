@@ -21,7 +21,7 @@ class ZenithServiceProviderTest extends TestCase
     {
         // Default config values defined in config/zenith.php should be present
         $this->assertTrue(config('zenith.enabled'));
-        $this->assertSame('default', config('zenith.connection'));
+        $this->assertSame('default', config('zenith.transport.connection'));
         $this->assertTrue(config('zenith.logging.enabled'));
         $this->assertTrue(config('zenith.queues.enabled'));
         $this->assertTrue(config('zenith.http.enabled'));
