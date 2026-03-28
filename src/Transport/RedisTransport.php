@@ -9,54 +9,40 @@ use Throwable;
 
 class RedisTransport implements TransportInterface
 {
-    protected string $connection;
-
-    public function __construct(?string $connection = null)
-    {
-        $this->connection = $connection ?? config('zenith.connection', 'default');
+    public function __construct(
+        private readonly string $connection
+    ) {
     }
 
-    public function publish(string $channel, array $payload): void
+    public function publish(string $topic, array $payload): void
     {
-        if (!config('zenith.enabled', true)) {
-            return;
-        }
-
         try {
             $json = json_encode($payload, JSON_THROW_ON_ERROR);
-            $this->redis()->command('publish', [$channel, $json]);
-        } catch (Throwable $e) {
+            $this->redis()->command('publish', [$topic, $json]);
+        } catch (Throwable) {
             // Silently fail to avoid disrupting the application
         }
     }
 
-    public function store(string $key, mixed $value, int $ttl): void
+    public function store(string $key, array $data, int $ttl): void
     {
-        if (!config('zenith.enabled', true)) {
-            return;
-        }
-
         try {
-            $json = is_array($value) ? json_encode($value, JSON_THROW_ON_ERROR) : $value;
+            $json = json_encode($data, JSON_THROW_ON_ERROR);
             $this->redis()->command('setex', [$key, $ttl, $json]);
-        } catch (Throwable $e) {
+        } catch (Throwable) {
             // Silently fail
         }
     }
 
     public function increment(string $key, ?int $ttl = null): void
     {
-        if (!config('zenith.enabled', true)) {
-            return;
-        }
-
         try {
             $this->redis()->command('incr', [$key]);
 
             if ($ttl !== null) {
                 $this->redis()->command('expire', [$key, $ttl]);
             }
-        } catch (Throwable $e) {
+        } catch (Throwable) {
             // Silently fail
         }
     }
@@ -65,8 +51,9 @@ class RedisTransport implements TransportInterface
     {
         try {
             $response = $this->redis()->command('ping');
+
             return $response === 'PONG' || $response === true;
-        } catch (Throwable $e) {
+        } catch (Throwable) {
             return false;
         }
     }

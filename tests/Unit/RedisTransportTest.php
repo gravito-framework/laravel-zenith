@@ -14,7 +14,7 @@ class RedisTransportTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->transport = new RedisTransport();
+        $this->transport = new RedisTransport('default');
     }
 
     /** @test */
@@ -30,7 +30,7 @@ class RedisTransportTest extends TestCase
         $connection->shouldReceive('command')
             ->once()
             ->with('publish', \Mockery::on(function ($args) {
-                return $args[0] === 'test_channel' && is_string($args[1]);
+                return $args[0] === 'test-topic' && is_string($args[1]);
             }))
             ->andReturn(1);
 
@@ -39,27 +39,19 @@ class RedisTransportTest extends TestCase
             ->with('default')
             ->andReturn($connection);
 
-        $this->transport->publish('test_channel', ['message' => 'test']);
+        $this->transport->publish('test-topic', ['message' => 'test']);
     }
 
     /** @test */
-    public function it_does_not_publish_when_zenith_is_disabled(): void
-    {
-        config(['zenith.enabled' => false]);
-
-        Redis::shouldReceive('connection')->never();
-
-        $this->transport->publish('test_channel', ['message' => 'test']);
-    }
-
-    /** @test */
-    public function it_can_store_values_with_ttl(): void
+    public function it_can_store_array_data_with_ttl(): void
     {
         $connection = \Mockery::mock(\Illuminate\Redis\Connections\Connection::class);
         $connection->shouldReceive('command')
             ->once()
             ->with('setex', \Mockery::on(function ($args) {
-                return $args[0] === 'test_key' && $args[1] === 60 && is_string($args[2]);
+                return $args[0] === 'test-key'
+                    && $args[1] === 60
+                    && json_decode($args[2], true) === ['data' => 'value'];
             }))
             ->andReturn('OK');
 
@@ -68,7 +60,7 @@ class RedisTransportTest extends TestCase
             ->with('default')
             ->andReturn($connection);
 
-        $this->transport->store('test_key', ['data' => 'value'], 60);
+        $this->transport->store('test-key', ['data' => 'value'], 60);
     }
 
     /** @test */
@@ -77,19 +69,19 @@ class RedisTransportTest extends TestCase
         $connection = \Mockery::mock(\Illuminate\Redis\Connections\Connection::class);
         $connection->shouldReceive('command')
             ->once()
-            ->with('incr', ['test_counter'])
+            ->with('incr', ['test-counter'])
             ->andReturn(1);
 
         $connection->shouldReceive('command')
             ->once()
-            ->with('expire', ['test_counter', 3600])
+            ->with('expire', ['test-counter', 3600])
             ->andReturn(1);
 
         Redis::shouldReceive('connection')
             ->with('default')
             ->andReturn($connection);
 
-        $this->transport->increment('test_counter', 3600);
+        $this->transport->increment('test-counter', 3600);
     }
 
     /** @test */
@@ -99,7 +91,7 @@ class RedisTransportTest extends TestCase
             ->once()
             ->andThrow(new \Exception('Redis connection failed'));
 
-        $this->transport->publish('test_channel', ['message' => 'test']);
+        $this->transport->publish('test-topic', ['message' => 'test']);
 
         $this->assertTrue(true);
     }
